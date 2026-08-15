@@ -1,35 +1,37 @@
 import unittest
+
 from api_contract_mock_server import evaluate
 
-GOOD = {"contract":"openapi.json","routes":["GET /health"],"modes":["success","degraded","invalid"],"default_status":200}
-BAD = {"contract":"openapi.json","routes":["GET /health"],"modes":["success"],"default_status":True}
+GOOD = {"contract": "openapi.json", "routes": ["GET /health"], "modes": ["success", "degraded", "invalid"], "default_status": 200}
+
 
 class ContractTests(unittest.TestCase):
-    def test_valid_record_builds_domain_artifact(self):
+    def test_valid_record_builds_fixtures_not_server(self):
         result = evaluate(GOOD)
         self.assertEqual(result["status"], "passed")
-        self.assertIn("GET /health", result["responses"])
-        self.assertEqual(len(result["evidence_sha256"]), 64)
+        self.assertFalse(result["responses"]["network_server"])
+        self.assertIn("GET /health", result["responses"]["routes"])
 
-    def test_result_is_deterministic(self):
-        self.assertEqual(evaluate(GOOD), evaluate(dict(reversed(list(GOOD.items())))))
+    def test_duplicate_route_is_rejected(self):
+        self.assertEqual(evaluate({**GOOD, "routes": ["GET /health", "GET /health"]})["status"], "failed")
 
-    def test_semantic_counterexample_fails_closed(self):
-        self.assertEqual(evaluate(BAD)["status"], "failed")
+    def test_unsupported_method_is_rejected(self):
+        self.assertEqual(evaluate({**GOOD, "routes": ["TRACE /health"]})["status"], "failed")
 
-    def test_missing_field_blocks(self):
-        record = dict(GOOD)
-        record.pop(next(iter(record)))
-        self.assertEqual(evaluate(record)["status"], "blocked")
+    def test_route_control_injection_is_rejected(self):
+        self.assertEqual(evaluate({**GOOD, "routes": ["GET /ok\nPOST /admin"]})["status"], "failed")
 
-    def test_boolean_numeric_spoof_is_rejected_when_present(self):
-        record = dict(GOOD)
-        numeric = next((key for key in ("default_status", "duration_ms", "completed", "tests_passed", "cpu_percent", "tests_total") if key in record), None)
-        if numeric is None:
-            self.skipTest("no numeric contract")
-        record[numeric] = True
-        self.assertEqual(evaluate(record)["status"], "failed")
+    def test_modes_are_exact_and_unique(self):
+        self.assertEqual(evaluate({**GOOD, "modes": ["success", "degraded", "invalid", "invalid"]})["status"], "failed")
+
+    def test_boolean_and_non_success_default_status_are_rejected(self):
+        self.assertEqual(evaluate({**GOOD, "default_status": True})["status"], "failed")
+        self.assertEqual(evaluate({**GOOD, "default_status": 500})["status"], "failed")
+
+    def test_non_object_and_missing_field_fail_closed(self):
+        self.assertEqual(evaluate(None)["status"], "failed")
+        self.assertEqual(evaluate({})["status"], "blocked")
+
 
 if __name__ == "__main__":
     unittest.main()
-
